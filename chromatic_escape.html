@@ -1,0 +1,952 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chromatic Escape</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#0a0a0f;display:flex;justify-content:center;align-items:center;min-height:100vh;font-family:'Share Tech Mono',monospace;color:#e0e0e0;overflow:hidden;}
+  #game-wrapper{position:relative;display:flex;flex-direction:column;align-items:center;gap:10px;}
+  #hud{display:flex;align-items:center;gap:16px;padding:8px 16px;background:rgba(15,15,25,0.95);border:1px solid rgba(255,255,255,0.08);border-radius:8px;backdrop-filter:blur(10px);width:720px;justify-content:space-between;}
+  .hud-section{display:flex;align-items:center;gap:8px;}
+  .hud-label{font-family:'Orbitron',sans-serif;font-size:9px;text-transform:uppercase;letter-spacing:2px;color:rgba(255,255,255,0.35);}
+  .color-swatch{width:24px;height:24px;border-radius:3px;border:2px solid rgba(255,255,255,0.15);transition:background-color 0.3s ease;}
+  .color-swatch.player-color{width:30px;height:30px;border:2px solid rgba(255,255,255,0.5);box-shadow:0 0 10px rgba(255,255,255,0.1);}
+  .mix-arrow{font-size:12px;color:rgba(255,255,255,0.2);}
+  #status-text{font-family:'Orbitron',sans-serif;font-size:11px;letter-spacing:1px;}
+  #level-text{font-family:'Orbitron',sans-serif;font-size:10px;letter-spacing:2px;color:rgba(255,255,255,0.45);}
+  #potion-hud{display:flex;align-items:center;gap:6px;}
+  .potion-slot{width:22px;height:22px;border-radius:50%;border:2px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.03);display:flex;align-items:center;justify-content:center;font-size:10px;transition:all 0.3s;}
+  .potion-slot.active{border-color:rgba(255,255,255,0.4);box-shadow:0 0 8px rgba(255,255,255,0.1);}
+  .potion-slot.timestop{border-color:rgba(100,200,255,0.5);background:rgba(100,200,255,0.1);}
+  canvas{border:1px solid rgba(255,255,255,0.08);border-radius:4px;display:block;}
+  #overlay{position:absolute;top:0;left:0;width:720px;height:540px;display:none;justify-content:center;align-items:center;background:rgba(5,5,15,0.88);backdrop-filter:blur(6px);z-index:10;border-radius:4px;flex-direction:column;gap:14px;}
+  #overlay.active{display:flex;}
+  #overlay h1{font-family:'Orbitron',sans-serif;font-size:30px;font-weight:900;letter-spacing:4px;}
+  #overlay p{font-size:13px;color:rgba(255,255,255,0.5);letter-spacing:1px;text-align:center;line-height:1.8;white-space:pre-line;}
+  #overlay .hint{font-size:11px;color:rgba(255,255,255,0.3);margin-top:4px;}
+  #overlay.win h1{color:#4ade80;}#overlay.lose h1{color:#f87171;}#overlay.intro h1{color:#a78bfa;}#overlay.nextlevel h1{color:#60a5fa;}
+  #instructions{font-size:10px;color:rgba(255,255,255,0.25);letter-spacing:1px;text-align:center;}
+  #slowmo-bar{position:absolute;top:8px;left:50%;transform:translateX(-50%);height:4px;background:rgba(100,200,255,0.7);border-radius:2px;z-index:5;transition:width 0.05s;display:none;box-shadow:0 0 10px rgba(100,200,255,0.4);}
+</style>
+</head>
+<body>
+<div id="game-wrapper">
+  <div id="hud">
+    <div class="hud-section">
+      <span class="hud-label">Mix</span>
+      <div class="color-swatch" id="swatch-2"></div>
+      <span class="mix-arrow">+</span>
+      <div class="color-swatch" id="swatch-1"></div>
+      <span class="mix-arrow">=</span>
+      <div class="color-swatch player-color" id="swatch-player"></div>
+    </div>
+    <div class="hud-section">
+      <span id="status-text">WHITE</span>
+    </div>
+    <div class="hud-section">
+      <span class="hud-label">Potions</span>
+      <div id="potion-hud"></div>
+    </div>
+    <div class="hud-section">
+      <span id="timer-text" style="font-family:'Orbitron',sans-serif;font-size:11px;letter-spacing:1px;color:rgba(255,255,255,0.6);">8:00</span>
+    </div>
+    <div class="hud-section">
+      <span id="level-text">ROOM 1</span>
+    </div>
+  </div>
+  <div style="position:relative;width:720px;height:540px;">
+    <div id="slowmo-bar"></div>
+    <canvas id="game" width="720" height="540"></canvas>
+    <div id="overlay">
+      <h1 id="overlay-title"></h1>
+      <p id="overlay-sub"></p>
+      <p class="hint" id="overlay-hint"></p>
+    </div>
+  </div>
+  <div id="instructions">WASD / Arrow Keys to move · Touch colored walls to mix · E to use potion · B for color rules · K to restart game · Reach the exit</div>
+</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = 720, H = 540, TILE = 36, COLS = 20, ROWS = 15;
+
+// ===================== COLOR SYSTEM =====================
+const COLORS = {
+  red:'#e63946',blue:'#457b9d',yellow:'#f4a261',green:'#2a9d8f',white:'#f1faee',
+  purple:'#7b2d8e',orange:'#e76f51',teal:'#1b998b',pink:'#ffb4a2',lime:'#b5e48c',
+  ltblue:'#a8dadc',ltyellow:'#ffd166',brown:'#8b5e3c',mint:'#99e2b4',
+  timestop:'#64c8ff',
+};
+const DISPLAY_NAMES = {
+  red:'RED',blue:'BLUE',yellow:'YELLOW',green:'GREEN',white:'WHITE',
+  purple:'PURPLE',orange:'ORANGE',teal:'TEAL',pink:'PINK',lime:'LIME',
+  ltblue:'LT.BLUE',ltyellow:'LT.YELLOW',brown:'BROWN',mint:'MINT',
+  timestop:'TIME STOP',
+};
+const MIX={};
+function defMix(a,b,r){if(!MIX[a])MIX[a]={};if(!MIX[b])MIX[b]={};MIX[a][b]=r;MIX[b][a]=r;}
+Object.keys(COLORS).forEach(c=>{defMix(c,c,c)});
+defMix('red','blue','purple');defMix('red','yellow','orange');defMix('red','green','brown');
+defMix('red','white','pink');defMix('blue','yellow','green');defMix('blue','green','teal');
+defMix('blue','white','ltblue');defMix('yellow','green','lime');defMix('yellow','white','ltyellow');
+defMix('green','white','mint');
+function getMixResult(a,b){return(MIX[a]&&MIX[a][b])?MIX[a][b]:a;}
+
+// ===================== WALL STATE SYSTEM =====================
+const wallPersistence = {};
+
+function getWallKey(col, row) { return col + ',' + row; }
+
+function initWallPersistence(levelIdx) {
+  if (!wallPersistence[levelIdx]) {
+    wallPersistence[levelIdx] = {};
+  }
+}
+
+function getPersistedWall(levelIdx, col, row, originalColor) {
+  initWallPersistence(levelIdx);
+  const key = getWallKey(col, row);
+  if (!wallPersistence[levelIdx][key]) {
+    wallPersistence[levelIdx][key] = {
+      color: originalColor,
+      touchesLeft: 8
+    };
+  }
+  return wallPersistence[levelIdx][key];
+}
+
+// Called when player touches a colored wall; returns the color the player receives
+// and updates the wall's persistent state
+function touchWall(levelIdx, wallObj, currentPlayerColor) {
+  const key = getWallKey(wallObj.gridCol, wallObj.gridRow);
+  const state = wallPersistence[levelIdx][key];
+  if (!state || state.touchesLeft <= 0) return null; // wall is colorless
+
+  const colorForPlayer = state.color;
+
+  // Only degrade the wall if the player color differs from the wall color
+  if (currentPlayerColor !== state.color) {
+    state.touchesLeft--;
+    if (state.touchesLeft <= 0) {
+      // Wall becomes colorless immediately
+      state.color = null; 
+    }
+  }
+
+  return colorForPlayer;
+}
+
+// ===================== GUARD DEFAULTS =====================
+const GUARD_DEFAULTS = {
+  coneAngle: Math.PI / 4,  
+  coneRadius: 3,           
+  speed: 1.0,
+};
+
+// ===================== GRID HELPERS =====================
+function createEmptyGrid(){
+  const grid=[];
+  for(let r=0;r<ROWS;r++){grid[r]=[];for(let c=0;c<COLS;c++)grid[r][c]='.';}
+  return grid;
+}
+function place(grid,x,y,val){grid[y-1][x-1]=val;}
+function placeRangeX(grid,x1,x2,y,val){for(let x=x1;x<=x2;x++)place(grid,x,y,val);}
+function placeRangeY(grid,x,y1,y2,val){for(let y=y1;y<=y2;y++)place(grid,x,y,val);}
+
+// ===================== BUILD LEVELS =====================
+function buildLevels(){
+  const levels=[];
+
+  // === LEVEL 1 ===
+  {
+    const grid=createEmptyGrid();
+    placeRangeX(grid,1,20,1,'1'); placeRangeX(grid,1,20,15,'1');
+    placeRangeY(grid,1,2,14,'1'); placeRangeY(grid,20,2,14,'1');
+    placeRangeY(grid,8,2,4,'1'); placeRangeY(grid,8,10,14,'1');
+    placeRangeY(grid,15,2,4,'1'); placeRangeY(grid,15,10,14,'1');
+    place(grid,2,7,'P');
+    place(grid,5,4,'RW'); place(grid,11,4,'YW');
+    place(grid,3,10,'s');
+    place(grid,19,7,'E');
+    place(grid,8,7,'PKRG'); place(grid,15,7,'YRG');
+    levels.push({
+      name:'CHROMATIC ESCAPE',
+      hint:'Touch colored walls to mix.\nMatch guard colors or sneak around their cones.\nWalls degrade after 8 touches!',
+      grid:grid,
+      guardDefs:{
+        'PKRG':{color:'pink',type:'regular'},
+        'YRG':{color:'yellow',type:'regular'},
+      },
+      timeLimit:480,
+    });
+  }
+
+  // === LEVEL 2 ===
+  {
+    const grid=createEmptyGrid();
+    placeRangeX(grid,1,20,1,'1'); placeRangeX(grid,1,20,15,'1');
+    placeRangeY(grid,1,2,14,'1'); placeRangeY(grid,20,2,14,'1');
+    placeRangeY(grid,4,2,6,'1');
+    placeRangeX(grid,2,7,10,'1');
+    placeRangeY(grid,7,5,9,'1');
+    placeRangeX(grid,8,14,5,'1');
+    placeRangeY(grid,14,6,11,'1');
+    place(grid,2,2,'P');
+    place(grid,11,6,'E');
+    place(grid,4,4,'GW');
+    place(grid,20,2,'BW');
+    place(grid,14,7,'YW');
+    place(grid,18,2,'TSP');
+    place(grid,4,8,'MRG2');
+    place(grid,9,3,'WRG2');
+    place(grid,13,3,'GAG2.5');
+    place(grid,17,7,'BAG3d0');
+    place(grid,17,10,'GAG2.5d90');
+    levels.push({
+      name:'TIME WARP',
+      hint:'Advanced guards spin twice as fast!\nUse the time-stop potion (E) to slow them down.\nWalls degrade permanently across deaths!',
+      grid:grid,
+      guardDefs:{
+        'MRG2':{color:'mint',type:'regular',coneRadius:2},
+        'WRG2':{color:'white',type:'regular',coneRadius:2},
+        'GAG2.5':{color:'green',type:'advanced',coneRadius:2.5},
+        'BAG3d0':{color:'blue',type:'advanced',coneRadius:3,startAngle:0},
+        'GAG2.5d90':{color:'green',type:'advanced',coneRadius:2.5,startAngle:90},
+      },
+      timeLimit:360,
+    });
+  }
+
+ // === LEVEL 3 ===
+  {
+    const grid=createEmptyGrid();
+    placeRangeY(grid,7,1,11,'1');
+    placeRangeY(grid,14,5,15,'1');
+    placeRangeX(grid,1,3,5,'RS'); placeRangeX(grid,1,3,12,'RS');
+    place(grid,5,2,'RW'); place(grid,6,11,'RW'); place(grid,8,2,'RW');
+    place(grid,9,2,'BW'); // <--- New blue wall placed here
+    place(grid,2,2,'P');
+    place(grid,6,4,'GW'); place(grid,3,15,'GW');
+    placeRangeX(grid,4,6,5,'GS');
+    placeRangeX(grid,1,6,9,'PKS'); placeRangeX(grid,8,10,11,'PKS');
+    place(grid,2,14,'BW'); place(grid,6,10,'BW');
+    placeRangeX(grid,4,6,12,'BS'); placeRangeY(grid,7,12,13,'BS');
+    placeRangeY(grid,7,14,15,'BRS');
+    placeRangeX(grid,11,13,11,'MS');
+    place(grid,12,9,'YW');
+    placeRangeX(grid,8,13,6,'YS');
+    place(grid,6,7,'WW'); place(grid,12,14,'WW'); place(grid,19,5,'WW');
+    placeRangeY(grid,14,3,4,'OS');
+    placeRangeY(grid,14,1,2,'PS');
+    placeRangeX(grid,15,20,7,'LBS');
+    place(grid,18,12,'E');
+
+    levels.push({
+      name:'CHROMATIC LABYRINTH',
+      hint:'Color sort blocks: same color = pass through, no color change.\nColored walls still block and change your color.\nPress B for color mixing rules.',
+      grid:grid,
+      guardDefs:{},
+      timeLimit:360,
+    });
+  }
+
+  // === LEVEL 4 ===
+  {
+    const grid=createEmptyGrid();
+    placeRangeX(grid,1,10,8,'1');
+    placeRangeY(grid,11,13,15,'1');
+    placeRangeX(grid,16,20,8,'1');
+    placeRangeY(grid,11,1,4,'1');
+    placeRangeY(grid,11,10,12,'RS');
+    placeRangeY(grid,11,4,6,'BS');
+    placeRangeX(grid,13,15,8,'GS');
+    place(grid,4,12,'RW');
+    place(grid,16,12,'GW');
+    place(grid,16,4,'BW');
+    place(grid,18,2,'TSP');
+    place(grid,2,10,'P');
+    place(grid,2,3,'E');
+
+    levels.push({
+      name:'THE NEXUS',
+      hint:'Three advanced guards at the center!\nEach wall can only be touched 8 times.\nUse the time-stop potion (E) wisely.',
+      grid:grid,
+      guardDefs:{},
+      timeLimit:360,
+      advancedSpeedMult:1, 
+      guardDirection:-1, 
+      multiGuards:[
+        {x:11,y:8,color:'red',type:'advanced',coneRadius:5,startAngle:75,coneAngle:75*Math.PI/180},
+        {x:11,y:8,color:'green',type:'advanced',coneRadius:5,startAngle:225,coneAngle:75*Math.PI/180},
+        {x:11,y:8,color:'blue',type:'advanced',coneRadius:5,startAngle:330,coneAngle:30*Math.PI/180},
+      ],
+    });
+  }
+
+  return levels;
+}
+
+const LEVELS=buildLevels();
+
+// ===================== GAME STATE =====================
+let currentLevel=0;
+let player={x:0,y:0,color:'white',size:TILE-8};
+let lastColors=['white','white'];
+let guards=[];
+let walls=[];
+let coloredWalls=[];
+let sortBlocks=[];
+let washStations=[];
+let potionPickups=[];
+let potionInventory=[];
+let exitPos={x:0,y:0};
+let gameState='intro';
+let alertTimer=0;
+let touchCooldown=0;
+let keys={};
+let particles=[];
+let frameCount=0;
+
+// Time-stop
+let timeStopActive=false;
+let timeStopTimer=0;
+const TIMESTOP_DURATION=210;
+
+// Level timer
+const levelTimers={};
+let levelTimerActive=false;
+let multiGuardBaseAngle=0;
+
+// ===================== LEVEL PARSING =====================
+function parseLevel(levelIdx){
+  const level=LEVELS[levelIdx];
+  walls=[];coloredWalls=[];sortBlocks=[];guards=[];washStations=[];potionPickups=[];potionInventory=[];particles=[];
+  timeStopActive=false;timeStopTimer=0;multiGuardBaseAngle=0;
+
+  const colorWallMap={
+    'RW':'red','BW':'blue','YW':'yellow','GW':'green','WW':'white',
+    'PKW':'pink','OW':'orange','TW':'teal','LBW':'ltblue','LYW':'ltyellow',
+    'LW':'lime','MW':'mint','BRW':'brown','PW':'purple',
+  };
+  const sortBlockMap={
+    'RS':'red','BS':'blue','YS':'yellow','GS':'green','WS':'white',
+    'PKS':'pink','OS':'orange','TS':'teal','LBS':'ltblue','LYS':'ltyellow',
+    'LS':'lime','MS':'mint','BRS':'brown','PS':'purple',
+  };
+  const potionMap={
+    'RP':{type:'color',color:'red'},'BP':{type:'color',color:'blue'},
+    'YP':{type:'color',color:'yellow'},'GP':{type:'color',color:'green'},
+    'WP':{type:'color',color:'white'},'TSP':{type:'timestop'},
+  };
+  const guardIds=Object.keys(level.guardDefs);
+
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      const ch=level.grid[r][c];
+      const px=c*TILE,py=r*TILE;
+
+      if(ch==='1'){
+        walls.push({x:px,y:py,w:TILE,h:TILE});
+      } else if(ch==='P'){
+        player.x=px+4;player.y=py+4;
+      } else if(ch==='E'){
+        exitPos={x:px,y:py};
+      } else if(ch==='s'){
+        washStations.push({x:px,y:py,w:TILE,h:TILE});
+      } else if(colorWallMap[ch]){
+        const origColor=colorWallMap[ch];
+        const persisted=getPersistedWall(levelIdx,c,r,origColor);
+        if(persisted.color===null){
+          walls.push({x:px,y:py,w:TILE,h:TILE});
+        } else {
+          coloredWalls.push({x:px,y:py,w:TILE,h:TILE,color:persisted.color,gridCol:c,gridRow:r});
+        }
+      } else if(sortBlockMap[ch]){
+        sortBlocks.push({x:px,y:py,w:TILE,h:TILE,color:sortBlockMap[ch]});
+      } else if(potionMap[ch]){
+        const def=potionMap[ch];
+        potionPickups.push({x:px,y:py,w:TILE,h:TILE,...def,collected:false});
+      } else if(guardIds.includes(ch)){
+        const def=level.guardDefs[ch];
+        const startAngle=(def.startAngle!==undefined)?(def.startAngle*Math.PI/180):(Math.random()*Math.PI*2);
+        let actualSpeed=def.speed||GUARD_DEFAULTS.speed;
+        let direction=1;
+        const coneRadius=(def.coneRadius||GUARD_DEFAULTS.coneRadius)*TILE;
+        const coneAngle=def.coneAngle||GUARD_DEFAULTS.coneAngle;
+
+        if(def.type==='advanced') actualSpeed*=(level.advancedSpeedMult||2);
+        if(def.type==='reversed') direction=-1;
+
+        guards.push({
+          x:px+TILE/2,y:py+TILE/2,
+          color:def.color,type:def.type,
+          angle:startAngle,baseSpeed:actualSpeed,speed:actualSpeed,
+          direction:direction,
+          coneRadius:coneRadius,coneAngle:coneAngle,
+        });
+      }
+    }
+  }
+
+  if(level.multiGuards){
+    const guardDirection=level.guardDirection||-1;
+    for(const mg of level.multiGuards){
+      const px=(mg.x-1)*TILE,py=(mg.y-1)*TILE;
+      const angleOffset=(mg.startAngle||0)*Math.PI/180;
+      let actualSpeed=mg.speed||GUARD_DEFAULTS.speed;
+      if(mg.type==='advanced') actualSpeed*=(level.advancedSpeedMult||2);
+      if(mg.type==='reversed') actualSpeed*=1;
+      guards.push({
+        x:px+TILE/2,y:py+TILE/2,
+        color:mg.color,type:mg.type,
+        angle:angleOffset,
+        angleOffset:angleOffset,
+        baseSpeed:actualSpeed,speed:actualSpeed,
+        direction:guardDirection,
+        coneRadius:(mg.coneRadius||GUARD_DEFAULTS.coneRadius)*TILE,
+        coneAngle:mg.coneAngle||GUARD_DEFAULTS.coneAngle,
+        isMultiGuard:true,
+      });
+    }
+  }
+
+  if(level.timeLimit && levelTimers[levelIdx]===undefined){
+    levelTimers[levelIdx]=level.timeLimit;
+  }
+  levelTimerActive=true;
+
+  updatePotionHUD();
+  updateTimerHUD();
+}
+
+// ===================== COLLISION =====================
+function rectsOverlap(ax,ay,aw,ah,bx,by,bw,bh){return ax<bx+bw&&ax+aw>bx&&ay<by+bh&&ay+ah>by;}
+function pointInCone(px,py,gx,gy,angle,radius,halfAngle){
+  const dx=px-gx,dy=py-gy,dist=Math.sqrt(dx*dx+dy*dy);
+  if(dist>radius)return false;
+  let a=Math.atan2(dy,dx),diff=a-angle;
+  while(diff>Math.PI)diff-=2*Math.PI;while(diff<-Math.PI)diff+=2*Math.PI;
+  return Math.abs(diff)<halfAngle;
+}
+
+// ===================== PARTICLES =====================
+function spawnParticles(x,y,color,count){
+  for(let i=0;i<count;i++){
+    const angle=Math.random()*Math.PI*2,speed=0.5+Math.random()*2.5;
+    particles.push({x,y,vx:Math.cos(angle)*speed,vy:Math.sin(angle)*speed,
+      life:25+Math.random()*35,maxLife:60,color:COLORS[color]||color,size:2+Math.random()*3});
+  }
+}
+function updateParticles(){
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i];p.x+=p.vx;p.y+=p.vy;p.vx*=0.95;p.vy*=0.95;p.life--;
+    if(p.life<=0)particles.splice(i,1);
+  }
+}
+function drawParticles(){
+  for(const p of particles){ctx.globalAlpha=(p.life/p.maxLife)*0.7;ctx.fillStyle=p.color;ctx.fillRect(p.x-p.size/2,p.y-p.size/2,p.size,p.size);}
+  ctx.globalAlpha=1;
+}
+
+// ===================== POTION SYSTEM =====================
+function usePotion(){
+  if(potionInventory.length===0)return;
+  const potion=potionInventory.shift();
+  if(potion.type==='timestop'){
+    timeStopActive=true;
+    timeStopTimer=TIMESTOP_DURATION;
+    for(const g of guards) g.speed=g.baseSpeed*0.5;
+    spawnParticles(player.x+player.size/2,player.y+player.size/2,'timestop',20);
+  } else if(potion.type==='color'){
+    lastColors[1]=lastColors[0];
+    lastColors[0]=potion.color;
+    player.color=getMixResult(lastColors[0],lastColors[1]);
+    alertTimer=25;
+    spawnParticles(player.x+player.size/2,player.y+player.size/2,player.color,12);
+  }
+  updateHUD();updatePotionHUD();
+}
+
+function updatePotionHUD(){
+  const hub=document.getElementById('potion-hud');
+  hub.innerHTML='';
+  if(potionInventory.length===0){
+    hub.innerHTML='<span style="font-size:9px;color:rgba(255,255,255,0.2);">—</span>';
+    return;
+  }
+  potionInventory.forEach((p)=>{
+    const slot=document.createElement('div');
+    slot.className='potion-slot active';
+    if(p.type==='timestop'){
+      slot.classList.add('timestop');
+      slot.textContent='⏱';
+      slot.title='Time Stop (E to use)';
+    } else {
+      slot.style.backgroundColor=COLORS[p.color];
+      slot.style.borderColor=COLORS[p.color];
+      slot.title=(DISPLAY_NAMES[p.color]||'')+' Potion (E to use)';
+    }
+    hub.appendChild(slot);
+  });
+}
+
+// ===================== INPUT =====================
+let showingRules=false;
+let confirmingReset=false;
+
+document.addEventListener('keydown',e=>{
+  keys[e.key]=true;
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault();
+  if(e.key==='r'||e.key==='R'){if(gameState==='lose')restartLevel();}
+  if(e.key==='e'||e.key==='E'){if(gameState==='playing')usePotion();}
+  if(e.key==='b'||e.key==='B'){
+    if(showingRules){showingRules=false;hideOverlay();if(gameState==='rules')gameState='playing';}
+    else if(gameState==='playing'){showingRules=true;gameState='rules';showRulesOverlay();}
+  }
+  if(e.key==='k'||e.key==='K'){
+    if(confirmingReset){
+      // Second press: confirmed — full game reset
+      confirmingReset=false;
+      currentLevel=0;
+      // Clear all persistent state
+      Object.keys(wallPersistence).forEach(k=>delete wallPersistence[k]);
+      Object.keys(levelTimers).forEach(k=>delete levelTimers[k]);
+      player.color='white';lastColors=['white','white'];
+      alertTimer=0;touchCooldown=0;
+      hideOverlay();
+      parseLevel(0);updateHUD();
+      showIntro();
+    } else {
+      // First press: show confirmation
+      confirmingReset=true;
+      gameState='confirmreset';
+      showOverlay('lose','RESTART GAME?','This will reset ALL progress.\nAll levels, timers, and wall states will be lost.','Press K again to confirm, any other key to cancel');
+    }
+  } else if(confirmingReset){
+    // Any other key cancels the reset
+    confirmingReset=false;
+    hideOverlay();
+    gameState='playing';
+  }
+  if(e.key===' '||e.key==='Enter'){
+    if(gameState==='intro'){gameState='playing';hideOverlay();}
+    else if(gameState==='nextlevel'){goNextLevel();}
+    else if(gameState==='allclear'){currentLevel=0;restartLevel();showIntro();}
+  }
+});
+document.addEventListener('keyup',e=>keys[e.key]=false);
+
+// ===================== UPDATE =====================
+const MOVE_SPEED=3;
+function update(){
+  frameCount++;updateParticles();
+
+  if((gameState==='playing'||gameState==='rules')&&levelTimers[currentLevel]!==undefined){
+    levelTimers[currentLevel]-=1/60;
+    updateTimerHUD();
+    if(levelTimers[currentLevel]<=0){
+      levelTimers[currentLevel]=0;
+      gameState='lose';
+      spawnParticles(player.x+player.size/2,player.y+player.size/2,'red',20);
+      showOverlay('lose','TIME\'S UP','You ran out of time!','Press R to retry');
+      return;
+    }
+  }
+
+  if(gameState!=='playing')return;
+  if(touchCooldown>0)touchCooldown--;
+
+  if(timeStopActive){
+    timeStopTimer--;
+    if(timeStopTimer<=0){
+      timeStopActive=false;
+      for(const g of guards) g.speed=g.baseSpeed;
+    }
+    const bar=document.getElementById('slowmo-bar');
+    bar.style.display='block';
+    bar.style.width=(timeStopTimer/TIMESTOP_DURATION*300)+'px';
+  } else {
+    document.getElementById('slowmo-bar').style.display='none';
+  }
+
+  let dx=0,dy=0;
+  if(keys['ArrowLeft']||keys['a']||keys['A'])dx=-MOVE_SPEED;
+  if(keys['ArrowRight']||keys['d']||keys['D'])dx=MOVE_SPEED;
+  if(keys['ArrowUp']||keys['w']||keys['W'])dy=-MOVE_SPEED;
+  if(keys['ArrowDown']||keys['s']||keys['S'])dy=MOVE_SPEED;
+  if(dx!==0&&dy!==0){dx*=0.707;dy*=0.707;}
+
+  // Move X
+  let nx=player.x+dx,blocked=false;
+  for(const w of walls){if(rectsOverlap(nx,player.y,player.size,player.size,w.x,w.y,w.w,w.h)){blocked=true;break;}}
+  for(const w of coloredWalls){
+    if(rectsOverlap(nx,player.y,player.size,player.size,w.x,w.y,w.w,w.h)){
+      blocked=true;touchColorWall(w);break;
+    }
+  }
+  for(const s of sortBlocks){
+    if(rectsOverlap(nx,player.y,player.size,player.size,s.x,s.y,s.w,s.h)){
+      if(player.color!==s.color){blocked=true;}
+      break;
+    }
+  }
+  if(!blocked)player.x=nx;
+
+  // Move Y
+  let ny=player.y+dy;blocked=false;
+  for(const w of walls){if(rectsOverlap(player.x,ny,player.size,player.size,w.x,w.y,w.w,w.h)){blocked=true;break;}}
+  for(const w of coloredWalls){
+    if(rectsOverlap(player.x,ny,player.size,player.size,w.x,w.y,w.w,w.h)){
+      blocked=true;touchColorWall(w);break;
+    }
+  }
+  for(const s of sortBlocks){
+    if(rectsOverlap(player.x,ny,player.size,player.size,s.x,s.y,s.w,s.h)){
+      if(player.color!==s.color){blocked=true;}
+      break;
+    }
+  }
+  if(!blocked)player.y=ny;
+
+  if(player.x<0)player.x=0;
+  if(player.y<0)player.y=0;
+  if(player.x+player.size>W)player.x=W-player.size;
+  if(player.y+player.size>H)player.y=H-player.size;
+
+  for(const p of potionPickups){
+    if(!p.collected&&rectsOverlap(player.x,player.y,player.size,player.size,p.x,p.y,p.w,p.h)){
+      p.collected=true;
+      potionInventory.push({type:p.type,color:p.color});
+      spawnParticles(p.x+p.w/2,p.y+p.h/2,p.type==='timestop'?'timestop':(p.color||'white'),10);
+      updatePotionHUD();
+    }
+  }
+
+  for(const ws of washStations){
+    if(rectsOverlap(player.x,player.y,player.size,player.size,ws.x,ws.y,ws.w,ws.h)){
+      if(player.color!=='white'){
+        player.color='white';lastColors=['white','white'];
+        spawnParticles(player.x+player.size/2,player.y+player.size/2,'white',14);updateHUD();
+      }
+    }
+  }
+
+  let multiGuardRotated=false;
+  for(const g of guards){
+    if(g.isMultiGuard){
+      if(!multiGuardRotated){
+        multiGuardBaseAngle+=g.speed*g.direction*0.02;
+        multiGuardRotated=true;
+      }
+      g.angle=multiGuardBaseAngle+g.angleOffset;
+    } else {
+      g.angle+=g.speed*g.direction*0.02;
+    }
+    const px=player.x, py=player.y, ps=player.size;
+    const checkPoints=[
+      [px,py],[px+ps,py],[px,py+ps],[px+ps,py+ps], 
+      [px+ps/2,py+ps/2] 
+    ];
+    let inCone=false;
+    for(const[cpx,cpy] of checkPoints){
+      if(pointInCone(cpx,cpy,g.x,g.y,g.angle,g.coneRadius,g.coneAngle)){inCone=true;break;}
+    }
+    if(inCone){
+      if(player.color!==g.color){
+        gameState='lose';spawnParticles(px+ps/2,py+ps/2,'red',20);
+        const pN=DISPLAY_NAMES[player.color]||player.color.toUpperCase();
+        const gN=DISPLAY_NAMES[g.color]||g.color.toUpperCase();
+        showOverlay('lose','DETECTED','You were '+pN+' — guard requires '+gN,'Press R to retry');
+      }
+    }
+  }
+
+  if(rectsOverlap(player.x,player.y,player.size,player.size,exitPos.x,exitPos.y,TILE,TILE)){
+    if(currentLevel<LEVELS.length-1){
+      gameState='nextlevel';spawnParticles(player.x+player.size/2,player.y+player.size/2,'green',25);
+      showOverlay('nextlevel','ROOM CLEARED','Next: Room '+(currentLevel+2)+' — '+LEVELS[currentLevel+1].name,'Press SPACE to continue');
+    } else {
+      gameState='allclear';spawnParticles(player.x+player.size/2,player.y+player.size/2,'green',40);
+      showOverlay('win','FACILITY ESCAPED','All rooms cleared!','Press SPACE to play again');
+    }
+  }
+  if(alertTimer>0)alertTimer--;
+}
+
+function touchColorWall(wallObj){
+  if(touchCooldown>0)return;
+  touchCooldown=12;
+
+  // Pass player.color to check against the wall color
+  const colorForPlayer=touchWall(currentLevel, wallObj, player.color);
+  if(colorForPlayer===null)return; // wall already dead
+
+  lastColors[1]=lastColors[0];
+  lastColors[0]=colorForPlayer;
+  player.color=getMixResult(lastColors[0],lastColors[1]);
+  alertTimer=25;
+  spawnParticles(player.x+player.size/2,player.y+player.size/2,player.color,8);
+  updateHUD();
+
+  const state=wallPersistence[currentLevel][getWallKey(wallObj.gridCol,wallObj.gridRow)];
+  if(state.color===null){
+    const idx=coloredWalls.indexOf(wallObj);
+    if(idx!==-1){
+      coloredWalls.splice(idx,1);
+      walls.push({x:wallObj.x,y:wallObj.y,w:TILE,h:TILE});
+      spawnParticles(wallObj.x+TILE/2,wallObj.y+TILE/2,'white',15);
+    }
+  } else {
+    wallObj.color=state.color;
+  }
+}
+
+// ===================== HUD =====================
+function updateHUD(){
+  document.getElementById('swatch-1').style.backgroundColor=COLORS[lastColors[0]];
+  document.getElementById('swatch-2').style.backgroundColor=COLORS[lastColors[1]];
+  document.getElementById('swatch-player').style.backgroundColor=COLORS[player.color];
+  const st=document.getElementById('status-text');
+  st.textContent=DISPLAY_NAMES[player.color]||player.color.toUpperCase();
+  st.style.color=COLORS[player.color];
+  document.getElementById('level-text').textContent='ROOM '+(currentLevel+1)+' / '+LEVELS.length;
+  updateTimerHUD();
+}
+function updateTimerHUD(){
+  const el=document.getElementById('timer-text');
+  const remaining=levelTimers[currentLevel];
+  if(remaining===undefined){el.textContent='';return;}
+  const mins=Math.floor(remaining/60);
+  const secs=Math.floor(remaining%60);
+  el.textContent=mins+':'+(secs<10?'0':'')+secs;
+  if(remaining<30)el.style.color='#f87171';
+  else if(remaining<60)el.style.color='#fbbf24';
+  else el.style.color='rgba(255,255,255,0.6)';
+}
+function showOverlay(type,title,sub,hint){
+  const ol=document.getElementById('overlay');ol.className='active '+type;
+  document.getElementById('overlay-title').textContent=title;
+  document.getElementById('overlay-sub').textContent=sub;
+  document.getElementById('overlay-hint').textContent=hint||'';
+}
+function hideOverlay(){document.getElementById('overlay').className='';document.getElementById('overlay-sub').innerHTML='';}
+
+function showRulesOverlay(){
+  const ol=document.getElementById('overlay');ol.className='active intro';
+  document.getElementById('overlay-title').textContent='COLOR MIXING RULES';
+  document.getElementById('overlay-hint').textContent='Press B to close';
+
+  const mixPairs=[
+    ['red','blue','purple'],['red','yellow','orange'],['red','green','brown'],
+    ['red','white','pink'],['blue','yellow','green'],['blue','green','teal'],
+    ['blue','white','ltblue'],['yellow','green','lime'],['yellow','white','ltyellow'],
+    ['green','white','mint'],
+  ];
+  let html='<div style="display:flex;flex-direction:column;gap:6px;align-items:center;font-size:12px;">';
+  html+='<div style="color:rgba(255,255,255,0.6);margin-bottom:4px;">Touch two colors to mix:</div>';
+  for(const[a,b,r] of mixPairs){
+    html+='<div style="display:flex;align-items:center;gap:6px;">';
+    html+=`<span style="display:inline-block;width:14px;height:14px;border-radius:2px;background:${COLORS[a]};"></span>`;
+    html+=`<span style="color:rgba(255,255,255,0.4);">${(DISPLAY_NAMES[a]||a)}</span>`;
+    html+='<span style="color:rgba(255,255,255,0.2);">+</span>';
+    html+=`<span style="display:inline-block;width:14px;height:14px;border-radius:2px;background:${COLORS[b]};"></span>`;
+    html+=`<span style="color:rgba(255,255,255,0.4);">${(DISPLAY_NAMES[b]||b)}</span>`;
+    html+='<span style="color:rgba(255,255,255,0.2);">=</span>';
+    html+=`<span style="display:inline-block;width:14px;height:14px;border-radius:2px;background:${COLORS[r]};"></span>`;
+    html+=`<span style="color:${COLORS[r]};">${(DISPLAY_NAMES[r]||r)}</span>`;
+    html+='</div>';
+  }
+  html+='<div style="color:rgba(255,255,255,0.35);margin-top:8px;font-size:10px;">Sort blocks: same color = pass through (no color change)</div>';
+  html+='<div style="color:rgba(255,255,255,0.35);font-size:10px;">Walls become colorless after 8 touches</div>';
+  html+='<div style="color:rgba(255,255,255,0.35);font-size:10px;">Touching a wall of your exact color does not drain its charges</div>';
+  html+='</div>';
+  document.getElementById('overlay-sub').innerHTML=html;
+}
+
+// ===================== DRAW =====================
+function draw(){
+  ctx.fillStyle='#10101a';ctx.fillRect(0,0,W,H);
+
+  if(timeStopActive){
+    ctx.fillStyle=`rgba(100,200,255,${0.03+0.02*Math.sin(frameCount*0.1)})`;
+    ctx.fillRect(0,0,W,H);
+  }
+
+  ctx.strokeStyle='rgba(255,255,255,0.025)';ctx.lineWidth=1;
+  for(let x=0;x<=W;x+=TILE){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+  for(let y=0;y<=H;y+=TILE){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+
+  const ep=0.6+0.4*Math.sin(frameCount*0.06);
+  ctx.fillStyle=`rgba(74,222,128,${0.08*ep})`;ctx.fillRect(exitPos.x,exitPos.y,TILE,TILE);
+  ctx.strokeStyle=`rgba(74,222,128,${0.6*ep})`;ctx.lineWidth=2;ctx.setLineDash([4,4]);
+  ctx.strokeRect(exitPos.x+2,exitPos.y+2,TILE-4,TILE-4);ctx.setLineDash([]);
+  ctx.fillStyle=`rgba(74,222,128,${0.8*ep})`;ctx.font='bold 9px Orbitron,monospace';ctx.textAlign='center';
+  ctx.fillText('EXIT',exitPos.x+TILE/2,exitPos.y+TILE/2+3);
+
+  for(const ws of washStations){
+    const wp=0.5+0.5*Math.sin(frameCount*0.08);
+    ctx.fillStyle=`rgba(241,250,238,${0.06*wp})`;ctx.fillRect(ws.x,ws.y,ws.w,ws.h);
+    ctx.save();ctx.translate(ws.x+ws.w/2,ws.y+ws.h/2);ctx.rotate(Math.PI/4);
+    ctx.strokeStyle=`rgba(241,250,238,${0.5*wp})`;ctx.lineWidth=1.5;ctx.strokeRect(-8,-8,16,16);
+    ctx.restore();
+    ctx.fillStyle='rgba(241,250,238,0.6)';ctx.font='8px Share Tech Mono,monospace';ctx.textAlign='center';
+    ctx.fillText('WASH',ws.x+ws.w/2,ws.y+ws.h/2+14);
+  }
+
+  for(const p of potionPickups){
+    if(p.collected)continue;
+    const pp=0.6+0.4*Math.sin(frameCount*0.1+p.x);
+    const color=p.type==='timestop'?COLORS.timestop:COLORS[p.color];
+    ctx.fillStyle=hexToRgba(color,0.08*pp);
+    ctx.fillRect(p.x,p.y,p.w,p.h);
+    ctx.save();
+    ctx.translate(p.x+p.w/2,p.y+p.h/2);
+    ctx.fillStyle=hexToRgba(color,0.7*pp);
+    ctx.beginPath();ctx.roundRect(-6,-2,12,14,3);ctx.fill();
+    ctx.fillStyle=hexToRgba(color,0.5*pp);
+    ctx.fillRect(-3,-8,6,7);
+    ctx.fillStyle='rgba(200,180,140,0.7)';
+    ctx.fillRect(-3,-10,6,3);
+    ctx.fillStyle='rgba(255,255,255,0.3)';
+    ctx.fillRect(-4,0,3,8);
+    ctx.restore();
+    const label=p.type==='timestop'?'⏱':(DISPLAY_NAMES[p.color]||'').charAt(0);
+    ctx.fillStyle='rgba(255,255,255,0.5)';
+    ctx.font='bold 7px Orbitron,monospace';ctx.textAlign='center';
+    ctx.fillText(label,p.x+p.w/2,p.y+p.h-4);
+  }
+
+  for(const w of walls){
+    ctx.fillStyle='#22222e';ctx.fillRect(w.x,w.y,w.w,w.h);
+    ctx.fillStyle='rgba(255,255,255,0.035)';ctx.fillRect(w.x,w.y,w.w,2);
+    ctx.strokeStyle='#2c2c3a';ctx.lineWidth=1;ctx.strokeRect(w.x+0.5,w.y+0.5,w.w-1,w.h-1);
+  }
+
+  for(const w of coloredWalls){
+    const state=wallPersistence[currentLevel]?wallPersistence[currentLevel][getWallKey(w.gridCol,w.gridRow)]:null;
+
+    ctx.shadowColor=COLORS[w.color];ctx.shadowBlur=8;
+    ctx.fillStyle=COLORS[w.color];ctx.fillRect(w.x,w.y,w.w,w.h);ctx.shadowBlur=0;
+    ctx.fillStyle='rgba(255,255,255,0.18)';ctx.fillRect(w.x+2,w.y+2,w.w-4,3);
+    ctx.fillStyle='rgba(0,0,0,0.4)';ctx.font='bold 7px Share Tech Mono,monospace';ctx.textAlign='center';
+    ctx.fillText((DISPLAY_NAMES[w.color]||w.color).toUpperCase(),w.x+w.w/2,w.y+w.h/2+3);
+
+    if(state){
+      const maxTouches = 8;
+      const touchesMade = maxTouches - state.touchesLeft;
+      const dotY=w.y+w.h-6;
+      const totalWidth=(maxTouches-1)*3.5; 
+      
+      for(let i=0;i<maxTouches;i++){
+        const dotX=w.x+w.w/2-totalWidth/2+i*3.5;
+        ctx.beginPath();ctx.arc(dotX,dotY,1.2,0,Math.PI*2);
+        ctx.fillStyle=i<touchesMade?'rgba(255,255,255,0.7)':'rgba(0,0,0,0.3)';
+        ctx.fill();
+      }
+      ctx.fillStyle='rgba(255,255,255,0.3)';
+      ctx.font='6px Share Tech Mono,monospace';
+      ctx.fillText(state.touchesLeft+' left',w.x+w.w/2,w.y+10);
+    }
+  }
+
+  for(const s of sortBlocks){
+    ctx.fillStyle=hexToRgba(COLORS[s.color],0.35);
+    ctx.fillRect(s.x,s.y,s.w,s.h);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(s.x,s.y,s.w,s.h);
+    ctx.clip();
+    ctx.strokeStyle=hexToRgba(COLORS[s.color],0.5);
+    ctx.lineWidth=1.5;
+    for(let i=-s.h;i<s.w+s.h;i+=6){
+      ctx.beginPath();
+      ctx.moveTo(s.x+i,s.y);
+      ctx.lineTo(s.x+i-s.h,s.y+s.h);
+      ctx.stroke();
+    }
+    ctx.restore();
+    ctx.strokeStyle=COLORS[s.color];ctx.lineWidth=1.5;
+    ctx.strokeRect(s.x+1,s.y+1,s.w-2,s.h-2);
+    ctx.fillStyle='rgba(255,255,255,0.6)';ctx.font='bold 6px Share Tech Mono,monospace';ctx.textAlign='center';
+    ctx.fillText((DISPLAY_NAMES[s.color]||s.color).toUpperCase(),s.x+s.w/2,s.y+s.h/2+2);
+    ctx.fillStyle='rgba(255,255,255,0.35)';ctx.font='5px Share Tech Mono,monospace';
+    ctx.fillText('SORT',s.x+s.w/2,s.y+s.h/2+10);
+  }
+
+  for(const g of guards){
+    ctx.save();ctx.translate(g.x,g.y);ctx.rotate(g.angle);
+    ctx.beginPath();ctx.moveTo(0,0);ctx.arc(0,0,g.coneRadius,-g.coneAngle,g.coneAngle);ctx.closePath();
+    const coneAlpha=timeStopActive?0.12:0.22;
+    ctx.fillStyle=hexToRgba(COLORS[g.color],coneAlpha);
+    ctx.fill();
+    ctx.strokeStyle=hexToRgba(COLORS[g.color],0.4);ctx.lineWidth=1.5;ctx.stroke();
+    ctx.restore();
+  }
+
+  for(const g of guards){
+    ctx.beginPath();ctx.arc(g.x,g.y,18,0,Math.PI*2);
+    ctx.fillStyle=hexToRgba(COLORS[g.color],0.1);ctx.fill();
+    ctx.beginPath();ctx.arc(g.x,g.y,12,0,Math.PI*2);
+    ctx.fillStyle=COLORS[g.color];ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,0.25)';ctx.lineWidth=1.5;ctx.stroke();
+
+    if(g.type==='advanced'){
+      ctx.beginPath();ctx.arc(g.x,g.y,15,0,Math.PI*2);
+      ctx.strokeStyle=hexToRgba(COLORS[g.color],0.4);
+      ctx.lineWidth=1;ctx.setLineDash([3,3]);ctx.stroke();ctx.setLineDash([]);
+    } else if(g.type==='reversed'){
+      ctx.beginPath();ctx.arc(g.x,g.y,15,0,Math.PI*2);
+      ctx.strokeStyle='rgba(255,100,100,0.3)';
+      ctx.lineWidth=1;ctx.stroke();
+    }
+
+    ctx.save();ctx.translate(g.x,g.y);ctx.rotate(g.angle);
+    ctx.fillStyle='rgba(0,0,0,0.6)';ctx.beginPath();ctx.arc(7,0,3,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,0.8)';ctx.beginPath();ctx.arc(8,0,1.2,0,Math.PI*2);ctx.fill();
+    ctx.restore();
+
+    const typeSuffix=g.type==='advanced'?' ⚡':g.type==='reversed'?' ↺':'';
+    ctx.fillStyle='rgba(255,255,255,0.4)';ctx.font='bold 7px Share Tech Mono,monospace';ctx.textAlign='center';
+    ctx.fillText((DISPLAY_NAMES[g.color]||g.color).toUpperCase()+typeSuffix,g.x,g.y-20);
+  }
+
+  drawParticles();
+
+  const pAlpha=alertTimer>0?0.7+0.3*Math.sin(alertTimer*0.5):1;
+  ctx.globalAlpha=pAlpha;
+  ctx.fillStyle='rgba(0,0,0,0.2)';ctx.fillRect(player.x+2,player.y+2,player.size,player.size);
+  ctx.fillStyle=COLORS[player.color];ctx.fillRect(player.x,player.y,player.size,player.size);
+  ctx.strokeStyle='rgba(255,255,255,0.55)';ctx.lineWidth=2;ctx.strokeRect(player.x,player.y,player.size,player.size);
+  ctx.fillStyle='rgba(255,255,255,0.2)';ctx.fillRect(player.x+3,player.y+3,player.size-6,3);
+  ctx.globalAlpha=1;
+}
+
+function hexToRgba(hex,alpha){
+  const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
+  return`rgba(${r},${g},${b},${alpha})`;
+}
+
+// ===================== GAME FLOW =====================
+function restartLevel(){
+  gameState='playing';player.color='white';lastColors=['white','white'];
+  alertTimer=0;touchCooldown=0;hideOverlay();parseLevel(currentLevel);updateHUD();
+}
+function goNextLevel(){
+  currentLevel++;player.color='white';lastColors=['white','white'];
+  alertTimer=0;touchCooldown=0;hideOverlay();parseLevel(currentLevel);updateHUD();
+  gameState='intro';showOverlay('intro',LEVELS[currentLevel].name,LEVELS[currentLevel].hint,'Press SPACE to start');
+}
+function showIntro(){
+  gameState='intro';showOverlay('intro',LEVELS[currentLevel].name,LEVELS[currentLevel].hint,'Press SPACE to start');
+}
+function gameLoop(){update();draw();requestAnimationFrame(gameLoop);}
+
+// ===================== INIT =====================
+parseLevel(0);updateHUD();updatePotionHUD();showIntro();gameLoop();
+</script>
+</body>
+</html>
